@@ -1,0 +1,165 @@
+// =========================
+// 1) พื้นที่ศึกษา
+// =========================
+var admin2 = ee.FeatureCollection("FAO/GAUL/2015/level2");
+
+var thoen = admin2.filter(
+  ee.Filter.and(
+    ee.Filter.eq('ADM0_NAME', 'Thailand'),
+    ee.Filter.eq('ADM1_NAME', 'Lampang'),
+    ee.Filter.eq('ADM2_NAME', 'Thoen')
+  )
+);
+
+Map.centerObject(thoen, 9);
+Map.addLayer(thoen, {}, 'Thoen Boundary');
+
+// =========================
+// 2) Cloud mask (SCL)
+// =========================
+function maskS2clouds(image) {
+  var scl = image.select('SCL');
+
+  var mask = scl.neq(3)
+    .and(scl.neq(8))
+    .and(scl.neq(9))
+    .and(scl.neq(10))
+    .and(scl.neq(11));
+
+  return image.updateMask(mask).divide(10000);
+}
+
+// =========================
+// 3) Composite (แก้ band ไม่เท่ากันตรงนี้ ⭐)
+// =========================
+function getComposite(start, end) {
+  return ee.ImageCollection("COPERNICUS/S2_SR")
+    .filterBounds(thoen)
+    .filterDate(start, end)
+    .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20))
+    
+    // ✅ เลือกเฉพาะ band ที่ต้องใช้
+    .select(['B2','B3','B4','B8','SCL'])
+    
+    .map(maskS2clouds)
+    .median()
+    .clip(thoen);
+}
+
+var img2020 = getComposite('2020-02-01', '2020-04-30');
+var img2024 = getComposite('2024-02-01', '2024-04-30');
+
+// =========================
+// 4) Spectral Index
+// =========================
+function addIndices(image) {
+  var ndvi = image.normalizedDifference(['B8', 'B4']).rename('NDVI');
+  var ndwi = image.normalizedDifference(['B3', 'B8']).rename('NDWI');
+  return image.addBands([ndvi, ndwi]);
+}
+
+img2020 = addIndices(img2020);
+img2024 = addIndices(img2024);
+
+// =========================
+// 5) Change
+// =========================
+var ndviDiff = img2024.select('NDVI')
+  .subtract(img2020.select('NDVI'));
+
+var ndwiDiff = img2024.select('NDWI')
+  .subtract(img2020.select('NDWI'));
+
+// =========================
+// 6) Visualization
+// =========================
+var ndviVis = {min: -1, max: 1, palette: ['brown', 'yellow', 'green']};
+var ndwiVis = {min: -1, max: 1, palette: ['white', 'blue']};
+var diffVis = {min: -0.5, max: 0.5, palette: ['red', 'white', 'green']};
+
+Map.addLayer(img2020.select('NDVI'), ndviVis, 'NDVI 2020');
+Map.addLayer(img2024.select('NDVI'), ndviVis, 'NDVI 2024');
+
+Map.addLayer(img2020.select('NDWI'), ndwiVis, 'NDWI 2020');
+Map.addLayer(img2024.select('NDWI'), ndwiVis, 'NDWI 2024');
+
+Map.addLayer(ndviDiff, diffVis, 'NDVI Change');
+Map.addLayer(ndwiDiff, diffVis, 'NDWI Change');
+
+// =========================
+// 7) Correlation
+// =========================
+var sample = img2024.select(['NDVI', 'NDWI']).sample({
+  region: thoen,
+  scale: 10,
+  numPixels: 500
+});
+
+var chart = ui.Chart.feature.byFeature(sample, 'NDVI', 'NDWI')
+  .setChartType('ScatterChart')
+  .setOptions({
+    title: 'NDVI vs NDWI',
+    hAxis: {title: 'NDVI'},
+    vAxis: {title: 'NDWI'}
+  });
+
+print(chart);
+
+// =========================
+// 8) EXPORT PNG
+// =========================
+
+// NDVI 2020
+Export.image.toDrive({
+  image: img2020.select('NDVI').visualize(ndviVis),
+  description: 'NDVI_2020_PNG',
+  folder: 'GEE_Lab',
+  fileNamePrefix: 'ndvi_2020',
+  region: thoen.geometry(),
+  scale: 10,
+  maxPixels: 1e13
+});
+
+// NDVI 2024
+Export.image.toDrive({
+  image: img2024.select('NDVI').visualize(ndviVis),
+  description: 'NDVI_2024_PNG',
+  folder: 'GEE_Lab',
+  fileNamePrefix: 'ndvi_2024',
+  region: thoen.geometry(),
+  scale: 10,
+  maxPixels: 1e13
+});
+
+// NDWI 2020
+Export.image.toDrive({
+  image: img2020.select('NDWI').visualize(ndwiVis),
+  description: 'NDWI_2020_PNG',
+  folder: 'GEE_Lab',
+  fileNamePrefix: 'ndwi_2020',
+  region: thoen.geometry(),
+  scale: 10,
+  maxPixels: 1e13
+});
+
+// NDWI 2024
+Export.image.toDrive({
+  image: img2024.select('NDWI').visualize(ndwiVis),
+  description: 'NDWI_2024_PNG',
+  folder: 'GEE_Lab',
+  fileNamePrefix: 'ndwi_2024',
+  region: thoen.geometry(),
+  scale: 10,
+  maxPixels: 1e13
+});
+
+// NDVI Change
+Export.image.toDrive({
+  image: ndviDiff.visualize(diffVis),
+  description: 'NDVI_Change_PNG',
+  folder: 'GEE_Lab',
+  fileNamePrefix: 'ndvi_change',
+  region: thoen.geometry(),
+  scale: 10,
+  maxPixels: 1e13
+});
